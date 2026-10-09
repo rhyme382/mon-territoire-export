@@ -1,0 +1,65 @@
+import { GpkgSvgError } from './errors.js';
+
+export const DEFAULT_STYLE = Object.freeze({
+  fill: 'none',
+  stroke: '#000000',
+  strokeWidth: 1,
+  vectorEffect: 'non-scaling-stroke',
+  fillRule: 'evenodd',
+});
+
+const fmt = (n) => {
+  if (!Number.isFinite(n)) throw new GpkgSvgError('NON_FINITE', 'Valeur non finie lors de la génération du SVG.');
+  return String(Math.round(n * 100) / 100);
+};
+
+export function ringToPath(ring, transform) {
+  const points = ring.slice();
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (points.length > 1 && first[0] === last[0] && first[1] === last[1]) points.pop();
+  if (points.length < 3) return '';
+  const coords = points.map((p) => transform.apply(p));
+  return `M${coords.map(([x, y]) => `${fmt(x)} ${fmt(y)}`).join('L')}Z`;
+}
+
+export function polygonsToPathData(polygons, transform) {
+  return polygons.flatMap((rings) => rings.map((ring) => ringToPath(ring, transform))).filter(Boolean).join('');
+}
+
+const esc = (value) => String(value).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+function layerToSvg(layer, defaults, transform) {
+  const st = { ...defaults, ...layer.style };
+  const paths = layer.features
+    .map((feature, i) => {
+      const d = polygonsToPathData(feature.polygons, transform);
+      if (!d) return null;
+      return `    <path id="${esc(layer.idPrefix)}-${i + 1}" d="${d}" fill="${esc(st.fill)}" fill-rule="${esc(st.fillRule)}" stroke="${esc(st.stroke)}" stroke-width="${fmt(st.strokeWidth)}" vector-effect="${esc(st.vectorEffect)}"/>`;
+    })
+    .filter(Boolean);
+  return `  <g inkscape:groupmode="layer" inkscape:label="${esc(layer.label)}" id="${esc(layer.id)}">
+${paths.join('\n')}
+  </g>`;
+}
+
+export function buildSvg({ layers, transform, metadata, style = DEFAULT_STYLE }) {
+  const defaults = { ...DEFAULT_STYLE, ...style };
+  const w = fmt(transform.width);
+  const h = fmt(transform.height);
+  const metaAttrs = Object.entries(metadata)
+    .map(([key, value]) => `${key}="${esc(value)}"`)
+    .join('\n        ');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     xmlns:mte="https://mon-territoire-export.local/ns/1"
+     width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" version="1.1">
+  <metadata id="metadata-mon-territoire-export">
+    <mte:export
+        ${metaAttrs}/>
+  </metadata>
+${layers.map((layer) => layerToSvg(layer, defaults, transform)).join('\n')}
+</svg>
+`;
+}

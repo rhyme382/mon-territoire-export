@@ -1,0 +1,13 @@
+{
+  "name": "mon-territoire-export",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node tools/probe/build.mjs",
+    "test": "node --disable-warning=ExperimentalWarning --test tools/probe/test/*.test.js tools/gpkg-svg/test/*.test.js",
+    "gpkg-to-svg": "node --disable-warning=ExperimentalWarning tools/gpkg-svg/cli.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

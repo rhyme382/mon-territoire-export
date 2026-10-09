@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Mon Territoire Export",
+  "version": "0.2.0",
+  "description": "Export local du cadastre (GeoPackage vers SVG) et sonde de diagnostic, sans réseau, sans persistance ni télémétrie.",
+  "permissions": ["activeTab"],
+  "content_scripts": [
+    {
+      "matches": ["https://carto.monterritoire.fr/*"],
+      "js": ["render-inspector.js", "mask-control.js", "gpkg-svg.js", "content-ui.js"],
+      "css": ["probe.css"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://carto.monterritoire.fr/*"],
+      "js": ["engine-inspector.js", "pci-contour-observer.js", "main-observer.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    }
+  ]
+}
