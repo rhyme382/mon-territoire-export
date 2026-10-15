@@ -5,3 +5,4 @@ dist/
 *.har
 *.log
 .DS_Store
+release/

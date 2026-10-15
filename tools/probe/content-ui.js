@@ -2,6 +2,10 @@ const EVENT = 'mon-territoire-probe:fact';
 const READY_EVENT = 'mon-territoire-probe:ready';
 const READY_REQUEST_EVENT = 'mon-territoire-probe:ready-request';
 const ENGINE_SNAPSHOT_REQUEST_EVENT = 'mon-territoire-probe:engine-snapshot-request';
+const VISIBLE_MAP_REQUEST_EVENT = 'mon-territoire-probe:visible-map-capture-request';
+const VISIBLE_CADASTRE_REQUEST_EVENT = 'mon-territoire-probe:visible-cadastre-request';
+const VISIBLE_SELECTION_REQUEST_EVENT = 'mon-territoire-probe:visible-selection-capture-request';
+const VISIBLE_CADASTRE_POLL_MS = 3000;
 const MAX_FACTS = 200;
 const MAX_BYTES = 1_000_000;
 const MAX_PCI_OBSERVATIONS = 5;
@@ -81,9 +85,13 @@ export function engineSnapshot(value) {
 
 // Sole trust boundary for data dispatched by the page MAIN world.
 export function validatePageFact(value) {
+  if (object(value) && value.type === 'visible-cadastre') return globalThis.MonTerritoireVisibleCadastre?.validateCapture(value) || null;
+  if (object(value) && (value.type === 'background-isolation' || value.type === 'background-restore' || value.type === 'basemap-ready')) return globalThis.MonTerritoireRenderedBasemap?.rbmValidateFact(value) || null;
+  if (object(value) && value.type === 'visible-selection-capture') { const capture = exactKeys(value, new Set(['type', 'capture'])) ? globalThis.MonTerritoireVisibleSelection?.validateCapture(value.capture) : null; return capture ? { type: 'visible-selection-capture', capture } : null; }
   if (!object(value) || containsForbidden(value)) return null;
   if (value.type === 'mvt') return mvt(value);
   if (value.type === 'pci-contour') return pciContour(value);
+  if (value.type === 'visible-map-capture') { const capture = exactKeys(value, new Set(['type', 'capture'])) ? globalThis.MonTerritoireVisibleMap?.validateCapture(value.capture) : null; return capture ? { type: 'visible-map-capture', capture } : null; }
   if (value.type === 'engine-snapshot' && exactKeys(value, new Set(['type', 'snapshot']))) { const snapshot = engineSnapshot(value.snapshot); return snapshot ? { type: 'engine-snapshot', snapshot } : null; }
   if (!exactKeys(value, new Set(['type', 'hostname', 'pathname', 'zxy', 'initiatorType', 'transferSize', 'encodedBodySize', 'decodedBodySize', 'leaflet', 'probeDiagnostics']))) return null;
   if (value.type === 'resource') {
@@ -141,65 +149,126 @@ function pciSummaryText(section) {
   return `status: observed\nroot type: ${latest.rootType ?? latest.rootKind}\nfeatures: ${latest.featureCount}\ngeometry types: ${latest.geometryTypes.join(', ') || 'none'}\nparcel identity: ${identity}\nexplicit CRS: ${latest.explicitCrs}`;
 }
 function installCollector() {
-  const resources = []; const facts = []; const mvtCandidates = []; const pciObservations = []; const engineSnapshots = []; let engineDiff; let diagnostics; let resourceFactsAccepted = 0; let resourceFactsRejected = 0; let mvtFactsAccepted = 0; let mvtFactsRejected = 0; let root; let renderSnapshot;
-  const report = () => safeReport({ pciContourObservations: pciObservations, resources, facts, probeDiagnostics: diagnostics, resourceFactsAccepted, resourceFactsRejected }); const engineReport = () => safeEngineReport(engineSnapshots, engineDiff); const render = () => { if (!root) return; const value = report(); root.querySelector('#counts').textContent = `${value.totals.resourceCount} resources · ${value.totals.knownBytes} B`; root.querySelector('#summary').textContent = JSON.stringify(value, null, 2); root.querySelector('#pci-contour').textContent = pciSummaryText(value.pciContour); const mvt = mvtReport(); root.querySelector('#mvt-counts').textContent = `Instrumentation active · ${mvt.diagnostics.candidatesObserved} candidates`; const engine = engineReport(); root.querySelector('#engine-counts').textContent = `${engine.diagnostics.snapshotCount} snapshots · ${engine.workers.length} workers · map reachable: ${engine.primaryMap.mapObjectReachable}`; };
+  const resources = []; const facts = []; const mvtCandidates = []; const pciObservations = []; const engineSnapshots = []; let engineDiff; let diagnostics; let resourceFactsAccepted = 0; let resourceFactsRejected = 0; let mvtFactsAccepted = 0; let mvtFactsRejected = 0; let internal; let renderSnapshot; let visibleCadastreHandler; const visibleMap = globalThis.MonTerritoireVisibleMap?.createAbSession(); const selectionAb = globalThis.MonTerritoireVisibleSelection?.createSession();
+  // MVP-06: rendered-basemap capture session (isolated world). The privileged call itself lives in the service worker.
+  const rendered = globalThis.MonTerritoireRenderedBasemap?.createRenderedBasemap({ request: (type, detail) => document.dispatchEvent(new CustomEvent(type, { detail })), runtime: globalThis.chrome?.runtime, win: globalThis, raf: callback => globalThis.requestAnimationFrame(callback), createImage: () => document.createElement('img'), createCanvas: (width, height) => { const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height; return canvas; } });
+  // Product commands arrive from the extension popup over a runtime port; the page receives no UI of its own. Internal diagnostics
+  // live in a detached element that is never attached to the document and are looked up here.
+  const ui = { querySelector: selector => internal?.querySelector?.(selector) ?? null };
+  const report = () => safeReport({ pciContourObservations: pciObservations, resources, facts, probeDiagnostics: diagnostics, resourceFactsAccepted, resourceFactsRejected }); const engineReport = () => safeEngineReport(engineSnapshots, engineDiff); const render = () => { if (!internal) return; const value = report(); ui.querySelector('#counts').textContent = `${value.totals.resourceCount} resources · ${value.totals.knownBytes} B`; ui.querySelector('#summary').textContent = JSON.stringify(value, null, 2); ui.querySelector('#pci-contour').textContent = pciSummaryText(value.pciContour); const mvt = mvtReport(); ui.querySelector('#mvt-counts').textContent = `Instrumentation active · ${mvt.diagnostics.candidatesObserved} candidates`; const engine = engineReport(); ui.querySelector('#engine-counts').textContent = `${engine.diagnostics.snapshotCount} snapshots · ${engine.workers.length} workers · map reachable: ${engine.primaryMap.mapObjectReachable}`; };
+  const renderVisibleMap = () => {
+    if (!internal || !visibleMap) return; const T = globalThis.MonTerritoireVisibleMap; const latest = visibleMap.state.B || visibleMap.state.A; const c = latest?.cadastreCandidate; const set = (id, text) => { ui.querySelector(id).textContent = text; };
+    set('#vm-map-status', latest ? latest.map.status : 'not captured'); set('#vm-map-zoom', latest?.map.zoom === undefined ? 'n/a' : String(latest.map.zoom)); set('#vm-map-layers', latest ? String(latest.map.layerCount) : 'n/a');
+    set('#vm-c-status', c ? c.status : 'not captured'); set('#vm-c-engine', c?.engine || 'n/a'); set('#vm-c-active', c ? String(c.active) : 'n/a'); set('#vm-c-cache', c ? `${c.tileCache.tiles} tiles · ${c.tileCache.vectorTiles} vector tiles` : 'n/a');
+    set('#vm-c-features', c ? String(c.decodedFeatures) : 'n/a'); set('#vm-c-geometry', c ? (c.decodedGeometry.present ? c.decodedGeometry.representations.join(' + ') : c.rendererOnly ? 'none (renderer only)' : 'none') : 'n/a');
+    set('#vm-c-keys', c ? (c.propertyKeys.join(', ') || 'none') : 'n/a'); set('#vm-c-export', c ? c.exportability.status : 'n/a');
+    set('#vm-slots', `A ${visibleMap.state.A ? 'captured' : '—'} · B ${visibleMap.state.B ? 'captured' : '—'}`);
+    set('#vm-conclusion', T.buildVisibleMapReport({ captureA: visibleMap.state.A, captureB: visibleMap.state.B }).conclusion.code);
+  };
+  const renderSelection = () => {
+    if (!internal || !selectionAb) return; const set = (id, text) => { ui.querySelector(id).textContent = text; };
+    set('#vs-slots', `A ${selectionAb.state.A ? 'capturée' : '—'} · B ${selectionAb.state.B ? 'capturée' : '—'}`);
+  };
   const mvtReport = () => safeMvtReport({ candidates: mvtCandidates, diagnostics: { sanitizedFactsAccepted: mvtFactsAccepted, sanitizedFactsRejected: mvtFactsRejected } });
-  document.addEventListener(EVENT, event => { const fact = validatePageFact(event?.detail); if (!fact) { if (event?.detail?.type === 'resource') resourceFactsRejected = Math.min(MAX_FACTS, resourceFactsRejected + 1); if (event?.detail?.type === 'mvt') mvtFactsRejected = Math.min(MAX_FACTS, mvtFactsRejected + 1); return; } if (fact.type === 'resource' && resources.length < MAX_FACTS) { resources.push(fact); resourceFactsAccepted++; } else if (fact.type === 'mvt' && mvtCandidates.length < MAX_FACTS) { mvtCandidates.push(fact); mvtFactsAccepted++; } else if (fact.type === 'pci-contour') { pciObservations.push(fact); if (pciObservations.length > MAX_PCI_OBSERVATIONS) pciObservations.shift(); } else if (fact.type === 'engine-snapshot' && engineSnapshots.length < 8) engineSnapshots.push(fact.snapshot); else if ((fact.type === 'dom' || fact.type === 'leaflet') && facts.length < MAX_FACTS) facts.push(fact); else if (fact.type === 'diagnostic') diagnostics = fact.probeDiagnostics; else { if (fact.type === 'resource') resourceFactsRejected = Math.min(MAX_FACTS, resourceFactsRejected + 1); if (fact.type === 'mvt') mvtFactsRejected = Math.min(MAX_FACTS, mvtFactsRejected + 1); return; } render(); });
+  document.addEventListener(EVENT, event => { const fact = validatePageFact(event?.detail); if (!fact) { if (event?.detail?.type === 'resource') resourceFactsRejected = Math.min(MAX_FACTS, resourceFactsRejected + 1); if (event?.detail?.type === 'mvt') mvtFactsRejected = Math.min(MAX_FACTS, mvtFactsRejected + 1); return; } if (fact.type === 'resource' && resources.length < MAX_FACTS) { resources.push(fact); resourceFactsAccepted++; } else if (fact.type === 'mvt' && mvtCandidates.length < MAX_FACTS) { mvtCandidates.push(fact); mvtFactsAccepted++; } else if (fact.type === 'pci-contour') { pciObservations.push(fact); if (pciObservations.length > MAX_PCI_OBSERVATIONS) pciObservations.shift(); } else if (fact.type === 'engine-snapshot' && engineSnapshots.length < 8) engineSnapshots.push(fact.snapshot); else if (fact.type === 'background-isolation' || fact.type === 'background-restore' || fact.type === 'basemap-ready') { rendered?.onFact(fact); return; } else if (fact.type === 'visible-cadastre') { visibleCadastreHandler?.(fact); return; } else if (fact.type === 'visible-map-capture') { visibleMap?.record(fact.capture.slot, fact.capture); renderVisibleMap(); } else if (fact.type === 'visible-selection-capture') { selectionAb?.record(fact.capture.slot, fact.capture); renderSelection(); return; } else if ((fact.type === 'dom' || fact.type === 'leaflet') && facts.length < MAX_FACTS) facts.push(fact); else if (fact.type === 'diagnostic') diagnostics = fact.probeDiagnostics; else { if (fact.type === 'resource') resourceFactsRejected = Math.min(MAX_FACTS, resourceFactsRejected + 1); if (fact.type === 'mvt') mvtFactsRejected = Math.min(MAX_FACTS, mvtFactsRejected + 1); return; } render(); });
   const signalReady = () => { if (document.documentElement) document.documentElement.setAttribute('data-mon-territoire-probe-ready', '1'); document.dispatchEvent(new CustomEvent(READY_EVENT)); };
   document.addEventListener(READY_REQUEST_EVENT, signalReady);
   signalReady();
   const installUi = () => {
-    if (root || !document.documentElement) return;
-    const host = document.createElement('div'); host.id = 'mon-territoire-probe-ui'; document.documentElement.append(host);
-    root = host.attachShadow({ mode: 'closed' });
-    root.innerHTML = `<style>:host{all:initial}section{width:260px;padding:10px;border:1px solid #99d;border-radius:8px;background:#152238;color:#fff;font:12px/1.4 system-ui,sans-serif}span,button{display:block;margin-top:7px}pre{overflow:auto;max-height:180px;white-space:pre-wrap}h1{margin:0 0 6px;font-size:12px;letter-spacing:.06em}h2{margin:8px 0 4px;font-size:12px}dl{display:grid;grid-template-columns:auto 1fr;gap:2px 8px;margin:6px 0}dt{opacity:.7}dd{margin:0}#export-message{white-space:pre-wrap}#export-message.error{color:#ffb4b4}input[type=file]{max-width:100%}details.diagnostic{margin-top:10px;opacity:.7;font-size:11px}details.devtools{margin-top:6px}#mask-message{opacity:.8}</style><section><h1>MON TERRITOIRE EXPORT</h1><h2>Carte</h2><button id="toggle-mask" type="button">Masquer le masque</button><span id="mask-message" role="status"></span><h2>Export cadastre</h2><label>Choisir un fichier GeoPackage<input id="gpkg-file" type="file" accept=".gpkg,application/geopackage+sqlite3,application/octet-stream"></label><span id="export-message" role="status"></span><dl id="export-summary" hidden><dt>Couche</dt><dd id="sum-layer"></dd><dt>Géométrie</dt><dd id="sum-geometry"></dd><dt>Parcelles</dt><dd id="sum-features"></dd><dt>CRS</dt><dd id="sum-crs"></dd></dl><button id="export-svg" type="button" hidden>Exporter en SVG</button><details class="diagnostic"><summary>Diagnostic</summary><details class="devtools"><summary>Outils de développement</summary><strong>Probe active</strong><span id="counts">0 resources · 0 B</span><details><summary>Sanitized summary</summary><pre id="summary" readonly></pre></details><button id="copy" type="button">Copy sanitized report</button><button id="download" type="button">Download sanitized JSON</button><hr><strong>PCI CONTOUR</strong><pre id="pci-contour">status: waiting</pre><hr><strong>T00-D MVT/PBF passive probe</strong><span id="mvt-counts">Instrumentation active · 0 candidates</span><button id="copy-mvt" type="button">Copy sanitized MVT report</button><button id="download-mvt" type="button">Download sanitized MVT report</button><hr><strong>Render inspection (T00-C)</strong><span id="render-counts">Not inspected</span><button id="inspect-render" type="button">Inspect render</button><button id="copy-render" type="button">Copy sanitized render report</button><button id="download-render" type="button">Download sanitized render report</button><hr><strong>T00-E Engine / Worker probe</strong><span id="engine-counts">0 snapshots · 0 workers · map reachable: false</span><button id="capture-engine" type="button">Capture engine snapshot</button><button id="compare-engine" type="button">Compare with previous snapshot</button><button id="copy-engine" type="button">Copy sanitized T00-E report</button><button id="download-engine" type="button">Download sanitized T00-E report</button></details></details></section>`;
-  const exportController = globalThis.MonTerritoireGpkgSvg?.createExportController({
-    save: (name, svg) => { const blob = new Blob([svg], { type: 'image/svg+xml' }); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 0); },
-    report: detail => console.warn('[mon-territoire-export]', detail.name, detail.code),
-  });
-  const renderExport = () => {
-    const state = exportController.state; const loaded = Boolean(state.summary);
-    root.querySelector('#export-summary').hidden = !loaded; root.querySelector('#export-svg').hidden = !loaded;
-    if (loaded) { root.querySelector('#sum-layer').textContent = state.summary.layer; root.querySelector('#sum-geometry').textContent = state.summary.geometry; root.querySelector('#sum-features').textContent = String(state.summary.features); root.querySelector('#sum-crs').textContent = state.summary.crs; }
-    const message = root.querySelector('#export-message');
-    message.className = state.status === 'error' ? 'error' : '';
-    message.textContent = { loading: 'Lecture locale du fichier…', loaded: 'GeoPackage chargé', exported: `SVG généré : ${state.fileName}`, error: state.message }[state.status] || '';
-  };
-  if (exportController) {
-    root.querySelector('#gpkg-file').addEventListener('change', async event => { const input = event.target; renderExport(); const pending = exportController.selectFile(input.files?.[0]); renderExport(); await pending; renderExport(); });
-    root.querySelector('#export-svg').addEventListener('click', () => { exportController.exportSvg(); renderExport(); });
-  } else root.querySelector('#gpkg-file').disabled = true;
-  root.querySelector('#copy').addEventListener('click', async () => { try { await copyReport(report()); } catch {} });
-  root.querySelector('#download').addEventListener('click', () => { const blob = new Blob([JSON.stringify(report(), null, 2)], { type: 'application/json' }); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'mon-territoire-probe-sanitized.json'; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 0); }); render();
-  root.querySelector('#copy-mvt').addEventListener('click', async () => { try { await copyMvtReport(mvtReport()); } catch {} });
-  root.querySelector('#download-mvt').addEventListener('click', () => { const blob = new Blob([JSON.stringify(mvtReport(), null, 2)], { type: 'application/json' }); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'mon-territoire-mvt-sanitized.json'; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 0); });
+    if (internal || !document.documentElement) return;
+    internal = document.createElement('div'); internal.innerHTML = `<details class="visible-cadastre"><summary>CADASTRE VISIBLE</summary><pre id="vc-diagnostic">Aucun export.</pre></details><details class="visible-background"><summary>FOND CARTOGRAPHIQUE</summary><pre id="vb-diagnostic">Aucun export.</pre></details><details class="visible-selection"><summary>SÉLECTION PARCELLAIRE</summary><button id="vs-capture-a" type="button">Capture A — Aucune sélection</button><button id="vs-capture-b" type="button">Capture B — Parcelles sélectionnées</button><button id="vs-compare" type="button">Comparer A/B</button><span id="vs-slots">A — · B —</span><span id="vs-conclusion">n/a</span><pre id="vs-comparison">Aucune comparaison.</pre><button id="vs-copy" type="button">Copier le rapport de sélection</button></details><details class="visible-map"><summary>VISIBLE MAP / CADASTRE</summary><h2>Map</h2><dl><dt>status</dt><dd id="vm-map-status">not captured</dd><dt>zoom</dt><dd id="vm-map-zoom">n/a</dd><dt>layers</dt><dd id="vm-map-layers">n/a</dd></dl><h2>Cadastre candidate</h2><dl><dt>status</dt><dd id="vm-c-status">not captured</dd><dt>engine</dt><dd id="vm-c-engine">n/a</dd><dt>active</dt><dd id="vm-c-active">n/a</dd><dt>tile cache</dt><dd id="vm-c-cache">n/a</dd><dt>decoded features</dt><dd id="vm-c-features">n/a</dd><dt>decoded geometry</dt><dd id="vm-c-geometry">n/a</dd><dt>property keys</dt><dd id="vm-c-keys">n/a</dd><dt>exportability</dt><dd id="vm-c-export">n/a</dd></dl><span id="vm-slots">A — · B —</span><button id="vm-capture-a" type="button">Capture A — Cadastre OFF</button><button id="vm-capture-b" type="button">Capture B — Cadastre ON</button><button id="vm-compare" type="button">Comparer A/B</button><span id="vm-conclusion"></span><pre id="vm-comparison"></pre><button id="vm-copy" type="button">Copier rapport MVP-03A</button><button id="vm-download" type="button">Télécharger rapport MVP-03A</button></details><details class="devtools"><summary>Probe tools</summary><strong>Probe active</strong><span id="counts">0 resources · 0 B</span><details><summary>Sanitized summary</summary><pre id="summary" readonly></pre></details><button id="copy" type="button">Copy sanitized report</button><button id="download" type="button">Download sanitized JSON</button><hr><strong>PCI CONTOUR</strong><pre id="pci-contour">status: waiting</pre><hr><strong>T00-D MVT/PBF passive probe</strong><span id="mvt-counts">Instrumentation active · 0 candidates</span><button id="copy-mvt" type="button">Copy sanitized MVT report</button><button id="download-mvt" type="button">Download sanitized MVT report</button><hr><strong>Render inspection (T00-C)</strong><span id="render-counts">Not inspected</span><button id="inspect-render" type="button">Inspect render</button><button id="copy-render" type="button">Copy sanitized render report</button><button id="download-render" type="button">Download sanitized render report</button><hr><strong>T00-E Engine / Worker probe</strong><span id="engine-counts">0 snapshots · 0 workers · map reachable: false</span><button id="capture-engine" type="button">Capture engine snapshot</button><button id="compare-engine" type="button">Compare with previous snapshot</button><button id="copy-engine" type="button">Copy sanitized T00-E report</button><button id="download-engine" type="button">Download sanitized T00-E report</button></details>`;
+  const saveSvg = (name, svg) => { const blob = new Blob([svg], { type: 'image/svg+xml' }); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 0); };
+  const ports = new Set();
+  let lastNotice = '';
+  const notify = (phase, text) => { if (`${phase}:${text}` === lastNotice) return; lastNotice = `${phase}:${text}`; for (const port of [...ports]) { try { port.postMessage({ type: 'mte:status', phase, text }); } catch { ports.delete(port); } } };
+  // Visible cadastre: availability is polled from the page's memory; the export only runs after an explicit popup command.
+  const visibleButton = { disabled: true }; let exportPending = false; let lastStatus = null; let startExport = () => notify('error', 'Carte non détectée.');
+  const T3B = globalThis.MonTerritoireVisibleCadastre; const SVG3B = globalThis.MonTerritoireGpkgSvg;
+  const requestVisible = mode => document.dispatchEvent(new CustomEvent(VISIBLE_CADASTRE_REQUEST_EVENT, { detail: mode }));
+  if (T3B && SVG3B?.exportVisibleCadastre) {
+    let capturing = false;
+    const RBM = globalThis.MonTerritoireRenderedBasemap;
+    const finishExport = (fact, reason, report) => {
+      try {
+        const result = SVG3B.exportVisibleCadastre(fact); saveSvg(result.fileName, result.svg);
+        ui.querySelector('#vc-diagnostic').textContent = T3B.diagnosticText(fact, selectionAb?.conclusionCode());
+        ui.querySelector('#vb-diagnostic').textContent = [T3B.backgroundText(fact), report ? RBM.rbmDiagnosticText(report) : ''].filter(Boolean).join('\n\n');
+        if (fact.selection) selectionAb?.recordExport(fact.selection.counts);
+        notify('done', fact.background?.status === 'embedded' ? 'Terminé.' : `Terminé.\n${T3B.backgroundFallbackMessage}`);
+      } catch (error) { console.warn('[mon-territoire-export]', error?.name, error?.code); notify('error', SVG3B.describeError(error)); }
+      visibleButton.disabled = false;
+    };
+    visibleCadastreHandler = fact => {
+      if (capturing) return;
+      lastStatus = fact.status;
+      if (!fact.features) { visibleButton.disabled = fact.status !== 'ready'; if (exportPending) { exportPending = false; notify('error', T3B.message(fact.status)); } return; }
+      if (!exportPending) return; exportPending = false;
+      // The page reader could not compose the tiles: ask for the rendered basemap. Any failure still exports the vector layers.
+      if (!rendered || fact.background?.status !== 'unavailable') { finishExport(fact, null, null); return; }
+      capturing = true; notify('preparing', 'Préparation du fond…');
+      rendered.capture(fact.background, { onPhase: phase => { if (phase === 'loading') notify('preparing', 'Préparation du fond…'); else notify('exporting', 'Export…'); } }).then(result => {
+        let exportFact = fact; let reason = result.reason || null;
+        if (result.background) { const merged = T3B.validateCapture({ ...fact, background: result.background }); if (merged) exportFact = merged; else reason = 'invalid-background'; }
+        finishExport(exportFact, reason, result.report);
+      }, () => { finishExport(fact, 'transaction-error', null); }).finally(() => { capturing = false; });
+    };
+    startExport = () => {
+      if (exportPending || capturing) { notify('exporting', 'Export…'); return; }
+      if (visibleButton.disabled) requestVisible('status'); // the answer is synchronous: the flag is cleared when the cadastre is usable
+      if (visibleButton.disabled) { notify('error', T3B.message(lastStatus || 'no-map')); return; }
+      exportPending = true; visibleButton.disabled = true; notify('exporting', 'Export…'); requestVisible('export');
+    };
+    requestVisible('status'); globalThis.setTimeout?.(() => requestVisible('status'), 500);
+    globalThis.setInterval?.(() => { if (!exportPending && !capturing && !document.hidden) requestVisible('status'); }, VISIBLE_CADASTRE_POLL_MS);
+  }
+  ui.querySelector('#copy').addEventListener('click', async () => { try { await copyReport(report()); } catch {} });
+  ui.querySelector('#download').addEventListener('click', () => { const blob = new Blob([JSON.stringify(report(), null, 2)], { type: 'application/json' }); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'mon-territoire-probe-sanitized.json'; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 0); }); render();
+  ui.querySelector('#copy-mvt').addEventListener('click', async () => { try { await copyMvtReport(mvtReport()); } catch {} });
+  ui.querySelector('#download-mvt').addEventListener('click', () => { const blob = new Blob([JSON.stringify(mvtReport(), null, 2)], { type: 'application/json' }); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'mon-territoire-mvt-sanitized.json'; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 0); });
   const maskControl = globalThis.MonTerritoireMaskControl?.createMaskControl(document);
-  const renderMask = () => {
-    const button = root.querySelector('#toggle-mask');
-    if (!maskControl) { button.disabled = true; return; }
-    button.textContent = maskControl.label();
-  };
-  root.querySelector('#toggle-mask').addEventListener('click', () => {
-    const result = maskControl?.toggle(); renderMask();
-    root.querySelector('#mask-message').textContent = result === 'absent' ? globalThis.MonTerritoireMaskControl.MASK_ABSENT_MESSAGE : '';
-  });
-  renderMask();
   const snapshot = () => {
     try {
       const inspector = globalThis.MonTerritoireRenderInspector?.inspectLeafletRender;
       if (!inspector) return;
       renderSnapshot = inspector(document, getComputedStyle);
       const panes = renderSnapshot.containers.reduce((sum, container) => sum + container.panes.length, 0);
-      root.querySelector('#render-counts').textContent = `${renderSnapshot.containers.length} containers · ${panes} panes`;
+      ui.querySelector('#render-counts').textContent = `${renderSnapshot.containers.length} containers · ${panes} panes`;
     } catch {}
   };
-  root.querySelector('#inspect-render').addEventListener('click', snapshot);
-  root.querySelector('#copy-render').addEventListener('click', async () => { if (!renderSnapshot) return; try { await copyRenderReport(renderSnapshot); } catch {} });
-  root.querySelector('#download-render').addEventListener('click', () => { if (!renderSnapshot) return; const blob = new Blob([JSON.stringify(renderSnapshot, null, 2)], { type: 'application/json' }); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'mon-territoire-render-inspection.json'; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 0); });
-  root.querySelector('#capture-engine').addEventListener('click', () => document.dispatchEvent(new CustomEvent(ENGINE_SNAPSHOT_REQUEST_EVENT)));
-  root.querySelector('#compare-engine').addEventListener('click', () => { engineDiff = engineComparison(engineSnapshots.at(-2), engineSnapshots.at(-1)); render(); });
-  root.querySelector('#copy-engine').addEventListener('click', async () => { try { await copyEngineReport(engineSnapshots, engineDiff); } catch {} });
-  root.querySelector('#download-engine').addEventListener('click', () => { const blob = new Blob([JSON.stringify(engineReport(), null, 2)], { type: 'application/json' }); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'mon-territoire-engine-worker-sanitized.json'; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 0); });
+  ui.querySelector('#inspect-render').addEventListener('click', snapshot);
+  ui.querySelector('#copy-render').addEventListener('click', async () => { if (!renderSnapshot) return; try { await copyRenderReport(renderSnapshot); } catch {} });
+  ui.querySelector('#download-render').addEventListener('click', () => { if (!renderSnapshot) return; const blob = new Blob([JSON.stringify(renderSnapshot, null, 2)], { type: 'application/json' }); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'mon-territoire-render-inspection.json'; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 0); });
+  // Captures happen only on an explicit click; the user toggles the cadastre in Mon Territoire, never this probe.
+  for (const [id, slot] of [['#vm-capture-a', 'A'], ['#vm-capture-b', 'B']]) ui.querySelector(id).addEventListener('click', () => document.dispatchEvent(new CustomEvent(VISIBLE_MAP_REQUEST_EVENT, { detail: slot })));
+  ui.querySelector('#vm-compare').addEventListener('click', () => { if (!visibleMap) return; const comparison = visibleMap.compare(); ui.querySelector('#vm-comparison').textContent = JSON.stringify(comparison, null, 2); renderVisibleMap(); });
+  ui.querySelector('#vm-copy').addEventListener('click', async () => { if (!visibleMap) return; try { await globalThis.MonTerritoireVisibleMap.copyVisibleMapReport(visibleMap.report()); } catch {} });
+  ui.querySelector('#vm-download').addEventListener('click', () => { if (!visibleMap) return; const blob = new Blob([JSON.stringify(visibleMap.report(), null, 2)], { type: 'application/json' }); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'mon-territoire-mvp-03a-visible-map.json'; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 0); });
+  renderVisibleMap();
+  if (!visibleMap) for (const id of ['#vm-capture-a', '#vm-capture-b', '#vm-compare', '#vm-copy', '#vm-download']) ui.querySelector(id).disabled = true;
+  // Selection A/B: the user selects parcels in Mon Territoire; this probe only reads the resulting structure on click.
+  if (selectionAb) {
+    for (const [id, slot] of [['#vs-capture-a', 'A'], ['#vs-capture-b', 'B']]) ui.querySelector(id).addEventListener('click', () => document.dispatchEvent(new CustomEvent(VISIBLE_SELECTION_REQUEST_EVENT, { detail: slot })));
+    ui.querySelector('#vs-compare').addEventListener('click', () => { const comparison = selectionAb.compare(); ui.querySelector('#vs-comparison').textContent = JSON.stringify(comparison, null, 2); ui.querySelector('#vs-conclusion').textContent = comparison.conclusion.code; });
+    ui.querySelector('#vs-copy').addEventListener('click', async () => { try { await globalThis.MonTerritoireVisibleSelection.copyReport(selectionAb.report()); } catch {} });
+  } else for (const id of ['#vs-capture-a', '#vs-capture-b', '#vs-compare', '#vs-copy']) ui.querySelector(id).disabled = true;
+  renderSelection();
+  ui.querySelector('#capture-engine').addEventListener('click', () => document.dispatchEvent(new CustomEvent(ENGINE_SNAPSHOT_REQUEST_EVENT)));
+  ui.querySelector('#compare-engine').addEventListener('click', () => { engineDiff = engineComparison(engineSnapshots.at(-2), engineSnapshots.at(-1)); render(); });
+  ui.querySelector('#copy-engine').addEventListener('click', async () => { try { await copyEngineReport(engineSnapshots, engineDiff); } catch {} });
+  ui.querySelector('#download-engine').addEventListener('click', () => { const blob = new Blob([JSON.stringify(engineReport(), null, 2)], { type: 'application/json' }); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'mon-territoire-engine-worker-sanitized.json'; link.click(); setTimeout(() => URL.revokeObjectURL(link.href), 0); });
+  // Popup commands. The toolbar click that opens the popup is the gesture granting activeTab on this tab.
+  const maskView = message => ({ type: 'mte:mask', state: maskControl ? maskControl.state() : 'absent', label: maskControl ? maskControl.label() : 'Masquer le masque', ...(message ? { message } : {}) });
+  const onCommand = (message, port) => {
+    try {
+      if (message?.type === 'mte:export') { lastNotice = ''; rendered?.arm(); startExport(); }
+      else if (message?.type === 'mte:mask-toggle') { const result = maskControl?.toggle(); port.postMessage(maskView(result === 'absent' || !maskControl ? globalThis.MonTerritoireMaskControl?.MASK_ABSENT_MESSAGE : '')); }
+      else if (message?.type === 'mte:mask-state') port.postMessage(maskView(''));
+    } catch {}
+  };
+  try { globalThis.chrome?.runtime?.onConnect?.addListener(port => {
+    if (port?.name !== 'mte-popup' || port.sender?.id !== globalThis.chrome.runtime.id) return;
+    ports.add(port); port.onDisconnect?.addListener(() => ports.delete(port)); port.onMessage?.addListener(message => onCommand(message, port));
+  }); } catch {}
   };
   return { report, mvtReport, engineReport, installUi };
 }

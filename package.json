@@ -5,6 +5,8 @@
   "scripts": {
     "build": "node tools/probe/build.mjs",
     "test": "node --disable-warning=ExperimentalWarning --test tools/probe/test/*.test.js tools/gpkg-svg/test/*.test.js",
+    "package": "node tools/probe/package.mjs",
+    "icons": "node tools/probe/make-icons.mjs",
     "gpkg-to-svg": "node --disable-warning=ExperimentalWarning tools/gpkg-svg/cli.js"
   },
   "engines": {

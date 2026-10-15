@@ -29,13 +29,27 @@ export function polygonsToPathData(polygons, transform) {
 
 const esc = (value) => String(value).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
+// Only self-contained rasters are written: a remote or relative link would make the SVG depend on the network.
+const EMBEDDED_IMAGE = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/;
+
+function rasterLayerToSvg(layer) {
+  const { rect, image } = layer;
+  if (!image || typeof image.dataUri !== 'string' || !EMBEDDED_IMAGE.test(image.dataUri)) throw new GpkgSvgError('INVALID_RASTER_LAYER', 'Image embarquée invalide.');
+  if (!rect || !(rect.width > 0) || !(rect.height > 0)) throw new GpkgSvgError('INVALID_RASTER_LAYER', 'Dimensions du raster invalides.');
+  return `  <g inkscape:groupmode="layer" inkscape:label="${esc(layer.label)}" id="${esc(layer.id)}">
+    <image id="${esc(layer.idPrefix)}-image" x="${fmt(rect.x)}" y="${fmt(rect.y)}" width="${fmt(rect.width)}" height="${fmt(rect.height)}" preserveAspectRatio="none" xlink:href="${image.dataUri}"/>
+  </g>`;
+}
+
 function layerToSvg(layer, defaults, transform) {
+  if (layer.type === 'raster') return rasterLayerToSvg(layer);
+  if (layer.type !== undefined && layer.type !== 'vector') throw new GpkgSvgError('UNSUPPORTED_LAYER_TYPE', 'Type de calque non supporté.');
   const st = { ...defaults, ...layer.style };
   const paths = layer.features
     .map((feature, i) => {
       const d = polygonsToPathData(feature.polygons, transform);
       if (!d) return null;
-      return `    <path id="${esc(layer.idPrefix)}-${i + 1}" d="${d}" fill="${esc(st.fill)}" fill-rule="${esc(st.fillRule)}" stroke="${esc(st.stroke)}" stroke-width="${fmt(st.strokeWidth)}" vector-effect="${esc(st.vectorEffect)}"/>`;
+      return `    <path id="${esc(layer.idPrefix)}-${i + 1}" d="${d}" fill="${esc(st.fill)}"${st.fillOpacity === undefined ? '' : ` fill-opacity="${fmt(st.fillOpacity)}"`} fill-rule="${esc(st.fillRule)}" stroke="${esc(st.stroke)}" stroke-width="${fmt(st.strokeWidth)}" vector-effect="${esc(st.vectorEffect)}"/>`;
     })
     .filter(Boolean);
   return `  <g inkscape:groupmode="layer" inkscape:label="${esc(layer.label)}" id="${esc(layer.id)}">
@@ -53,6 +67,7 @@ export function buildSvg({ layers, transform, metadata, style = DEFAULT_STYLE })
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg"
      xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     xmlns:xlink="http://www.w3.org/1999/xlink"
      xmlns:mte="https://mon-territoire-export.local/ns/1"
      width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" version="1.1">
   <metadata id="metadata-mon-territoire-export">

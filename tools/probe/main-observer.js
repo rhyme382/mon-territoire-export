@@ -2,6 +2,12 @@ const EVENT = 'mon-territoire-probe:fact';
 const READY_EVENT = 'mon-territoire-probe:ready';
 const READY_REQUEST_EVENT = 'mon-territoire-probe:ready-request';
 const ENGINE_SNAPSHOT_REQUEST_EVENT = 'mon-territoire-probe:engine-snapshot-request';
+const VISIBLE_MAP_REQUEST_EVENT = 'mon-territoire-probe:visible-map-capture-request';
+const VISIBLE_CADASTRE_REQUEST_EVENT = 'mon-territoire-probe:visible-cadastre-request';
+const VISIBLE_SELECTION_REQUEST_EVENT = 'mon-territoire-probe:visible-selection-capture-request';
+const BACKGROUND_ISOLATE_EVENT = 'mon-territoire-probe:background-isolate-request';
+const BACKGROUND_RESTORE_EVENT = 'mon-territoire-probe:background-restore-request';
+const BASEMAP_READY_EVENT = 'mon-territoire-probe:basemap-ready-request';
 const MAX_BODY_BYTES = 1_000_000;
 const MAX_FACTS = 200;
 
@@ -181,6 +187,42 @@ function install() {
   document.addEventListener(READY_EVENT, () => bridge.ready(), { once: true });
   document.addEventListener(ENGINE_SNAPSHOT_REQUEST_EVENT, () => {
     try { bridge.fact({ type: 'engine-snapshot', snapshot: globalThis.MonTerritoireEngineInspector?.capture?.() }); } catch {}
+  });
+  document.addEventListener(VISIBLE_MAP_REQUEST_EVENT, event => {
+    const slot = event?.detail; if (slot !== 'A' && slot !== 'B') return;
+    try { const capture = globalThis.MonTerritoireVisibleMapInspector?.capture?.(); if (capture) bridge.fact({ type: 'visible-map-capture', capture: { ...capture, slot } }); } catch {}
+  });
+  // A/B selection snapshot: structure of the layers already in memory, taken only on an explicit click.
+  document.addEventListener(VISIBLE_SELECTION_REQUEST_EVENT, event => {
+    const slot = event?.detail; if (slot !== 'A' && slot !== 'B') return;
+    try { const capture = globalThis.MonTerritoireVisibleMapInspector?.selectionCapture?.(slot); if (capture) bridge.fact({ type: 'visible-selection-capture', capture: { ...capture, slot } }); } catch {}
+  });
+  // 'status' only checks availability; 'export' reads the geometry already in memory. Neither requests anything.
+  document.addEventListener(VISIBLE_CADASTRE_REQUEST_EVENT, event => {
+    const mode = event?.detail; if (mode !== 'status' && mode !== 'export') return;
+    try { const result = globalThis.MonTerritoireVisibleMapInspector?.visibleCadastre?.({ dryRun: mode === 'status' }); if (result) bridge.fact(result); } catch {}
+  });
+  // MVP-06: visual isolation for the rendered-basemap capture. Local and reversible; the isolated world asks for the restoration.
+  const transactionId = value => (typeof value === 'string' && /^[a-z0-9-]{1,40}$/.test(value) ? value : null);
+  document.addEventListener(BACKGROUND_ISOLATE_EVENT, event => {
+    const transaction = transactionId(event?.detail); if (!transaction) return;
+    try { const result = globalThis.MonTerritoireCaptureIsolation?.isolate(transaction); bridge.fact({ type: 'background-isolation', transaction, ...(result || { status: 'unavailable', reason: 'no-map' }) }); }
+    catch { try { globalThis.MonTerritoireCaptureIsolation?.restore(transaction); } catch {} bridge.fact({ type: 'background-isolation', transaction, status: 'unavailable', reason: 'hide-failed' }); }
+  });
+  // MVP-07: passive readiness barrier on the tiles already in the page ("wait:<tx>" waits, "check:<tx>" answers at once).
+  document.addEventListener(BASEMAP_READY_EVENT, event => {
+    const request = globalThis.MonTerritoireBasemapReadyMode?.(event?.detail); if (!request) return;
+    const readiness = globalThis.MonTerritoireBasemapReadiness;
+    const unavailable = { type: 'basemap-ready', transaction: request.transaction, mode: request.mode, verdict: 'unavailable', counts: { visible: 0, ready: 0, loading: 0, error: 0 }, waitMs: 0, timedOut: false, viewUnchanged: true };
+    try {
+      if (request.mode === 'check') bridge.fact(readiness?.check(request.transaction) || unavailable);
+      else Promise.resolve(readiness?.wait(request.transaction)).then(result => bridge.fact(result || unavailable), () => bridge.fact(unavailable));
+    } catch { bridge.fact(unavailable); }
+  });
+  document.addEventListener(BACKGROUND_RESTORE_EVENT, event => {
+    const transaction = transactionId(event?.detail); if (!transaction) return;
+    let result = null; try { result = globalThis.MonTerritoireCaptureIsolation?.restore(transaction); } catch {}
+    bridge.fact({ type: 'background-restore', transaction, restored: result?.restored === true, viewUnchanged: result?.viewUnchanged === true, watchdog: result?.watchdog === true });
   });
   if (document.documentElement?.getAttribute('data-mon-territoire-probe-ready') === '1') bridge.ready();
   else document.dispatchEvent(new CustomEvent(READY_REQUEST_EVENT));

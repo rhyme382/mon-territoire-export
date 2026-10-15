@@ -234,13 +234,16 @@ test('dist/gpkg-svg.js exécuté seul dans un contexte vierge : même SVG que la
   assert.equal(svg, convertGeoPackageToSvg(main, { now: NOW }).svg);
 });
 
-test('interface : section Export cadastre, input fichier local, Diagnostic secondaire', () => {
+test('interface : le popup porte la section GeoPackage et l’input fichier local ; la page n’injecte aucune interface', () => {
+  const popup = readFileSync(dist('popup.html'), 'utf8');
   const ui = readFileSync(dist('content-ui.js'), 'utf8');
-  assert.match(ui, /MON TERRITOIRE EXPORT/);
-  assert.match(ui, /Export cadastre/);
-  assert.ok(ui.includes('accept=\\".gpkg,application/geopackage+sqlite3,application/octet-stream\\"') || ui.includes('accept=".gpkg,application/geopackage+sqlite3,application/octet-stream"'));
-  assert.match(ui, /Exporter en SVG/);
-  assert.ok(ui.indexOf('Export cadastre') < ui.indexOf('<summary>Diagnostic</summary>'));
+  assert.match(popup, /MON TERRITOIRE EXPORT/);
+  assert.match(popup, /<h2>GeoPackage<\/h2>/);
+  assert.ok(popup.includes('accept=".gpkg,application/geopackage+sqlite3,application/octet-stream"'));
+  assert.match(popup, /Exporter en SVG/);
+  assert.equal(/Diagnostic|Outils de développement/.test(popup), false);
+  assert.equal(/MON TERRITOIRE EXPORT|attachShadow|id="gpkg-file"/.test(ui), false);
+  // Internal diagnostics remain in a detached element of the content script.
   for (const id of ['copy', 'download', 'copy-mvt', 'inspect-render', 'capture-engine', 'download-engine']) assert.ok(ui.includes(`id="${id}"`), id);
 });
 

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Mon Territoire Export</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<main>
+<h1>MON TERRITOIRE EXPORT</h1>
+<section>
+<h2>Carte visible</h2>
+<button id="export-visible" type="button">Exporter en SVG</button>
+<p id="visible-message" role="status"></p>
+</section>
+<section>
+<h2>Affichage</h2>
+<button id="toggle-mask" type="button">Masquer le masque</button>
+<p id="mask-message" role="status"></p>
+</section>
+<section>
+<h2>GeoPackage</h2>
+<label for="gpkg-file" class="file-label">Choisir un fichier</label>
+<input id="gpkg-file" type="file" accept=".gpkg,application/geopackage+sqlite3,application/octet-stream">
+<p id="gpkg-name"></p>
+<dl id="gpkg-summary" hidden><dt>Couche</dt><dd id="sum-layer"></dd><dt>Parcelles</dt><dd id="sum-features"></dd></dl>
+<button id="export-svg" type="button" disabled>Exporter en SVG</button>
+<p id="gpkg-message" role="status"></p>
+</section>
+</main>
+<script src="gpkg-svg.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>

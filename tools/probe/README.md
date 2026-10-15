@@ -1,3 +1,5 @@
+> **Historique T00.** Cette page documente les sondes passives T00-B…T00-E. Depuis MVP-07 leurs boutons ne sont plus affichés dans l'interface produit (leur code reste, interne, pour les tests). Pour le build, le chargement et le ZIP, voir `docs/packaging.md`.
+
 # Sonde locale temporaire T00-B/T00-C/T00-D
 
 Cette extension MV3 observe passivement les ressources déjà chargées par la page. Elle ne déclenche aucune requête, ne modifie pas le trafic, ne lit pas les cookies ni `Authorization`, ne persiste pas de données et n'envoie aucune télémétrie.

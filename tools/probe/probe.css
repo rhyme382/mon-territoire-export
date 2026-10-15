@@ -1,4 +1,0 @@
-#mon-territoire-probe-ui { position: fixed; z-index: 2147483647; right: 12px; bottom: 12px; color: #fff; font: 12px/1.4 system-ui, sans-serif; }
-#mon-territoire-probe-ui section { width: 260px; padding: 10px; border: 1px solid #99d; border-radius: 8px; background: #152238; box-shadow: 0 2px 10px #0008; }
-#mon-territoire-probe-ui span, #mon-territoire-probe-ui button { display: block; margin-top: 7px; }
-#mon-territoire-probe-ui pre { overflow: auto; max-height: 180px; white-space: pre-wrap; }

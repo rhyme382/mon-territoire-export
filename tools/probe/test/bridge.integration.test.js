@@ -22,7 +22,7 @@ function createSharedDocument() {
     getAttribute: key => attributes.get(key) || null,
     setAttribute: (key, value) => attributes.set(key, value),
     append() {},
-    attachShadow: () => shadow
+    querySelector: selector => shadow.querySelector(selector)
   };
   return { ...bus, root: shadow, documentElement: element, createElement: () => element, addEventListener: bus.addEventListener.bind(bus), dispatchEvent: bus.dispatchEvent.bind(bus) };
 }
@@ -43,7 +43,7 @@ function createDocumentWithoutRoot() {
   const document = {
     ...bus,
     documentElement: null,
-    createElement: () => ({ id: '', attachShadow: () => shadow }),
+    createElement: () => ({ id: '', querySelector: selector => shadow.querySelector(selector) }),
     addEventListener: bus.addEventListener.bind(bus),
     dispatchEvent: bus.dispatchEvent.bind(bus)
   };

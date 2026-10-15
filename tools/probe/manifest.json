@@ -2,18 +2,59 @@
   "manifest_version": 3,
   "name": "Mon Territoire Export",
   "version": "0.2.0",
-  "description": "Export local du cadastre (GeoPackage vers SVG) et sonde de diagnostic, sans réseau, sans persistance ni télémétrie.",
-  "permissions": ["activeTab"],
+  "description": "Exporte la carte visible de Mon Territoire et le cadastre (GeoPackage) en SVG vectoriel, en local, sans réseau ni télémétrie.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "permissions": [
+    "activeTab"
+  ],
+  "action": {
+    "default_title": "Mon Territoire Export",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "service-worker.js"
+  },
   "content_scripts": [
     {
-      "matches": ["https://carto.monterritoire.fr/*"],
-      "js": ["render-inspector.js", "mask-control.js", "gpkg-svg.js", "content-ui.js"],
-      "css": ["probe.css"],
+      "matches": [
+        "https://carto.monterritoire.fr/*"
+      ],
+      "js": [
+        "render-inspector.js",
+        "mask-control.js",
+        "gpkg-svg.js",
+        "visible-map-report.js",
+        "visible-selection-report.js",
+        "visible-cadastre-export.js",
+        "rendered-basemap.js",
+        "content-ui.js"
+      ],
       "run_at": "document_start"
     },
     {
-      "matches": ["https://carto.monterritoire.fr/*"],
-      "js": ["engine-inspector.js", "pci-contour-observer.js", "main-observer.js"],
+      "matches": [
+        "https://carto.monterritoire.fr/*"
+      ],
+      "js": [
+        "engine-inspector.js",
+        "visible-cadastre-geometry.js",
+        "visible-background.js",
+        "visible-map-inspector.js",
+        "visible-capture-isolation.js",
+        "pci-contour-observer.js",
+        "main-observer.js"
+      ],
       "world": "MAIN",
       "run_at": "document_start"
     }

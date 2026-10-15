@@ -1,5 +1,6 @@
 import { GpkgSvgError } from '../core/errors.js';
 import { defaultSvgFileName, prepareCadastreDocument, renderExportDocument } from '../core/pipeline.js';
+import { prepareViewportDocument, renderViewportDocument, viewportSvgFileName } from '../core/viewport-export.js';
 import { openGeoPackageFromBytes } from './sqlite-file-reader.js';
 
 // Browser entry point. Everything below runs on an in-memory copy of the file
@@ -21,6 +22,8 @@ const MESSAGES = {
   UNSUPPORTED_GEOMETRY: 'Type de géométrie non supporté : seules les parcelles Polygon / MultiPolygon sont converties.',
   EMPTY_LAYER: 'La couche ne contient aucune géométrie exploitable.',
   INVALID_GEOMETRY: 'Une géométrie du fichier est invalide ou corrompue.',
+  INVALID_VIEWPORT_CAPTURE: 'Le cadastre visible n’a pas pu être converti.',
+  INVALID_RASTER_LAYER: 'Le fond cartographique n’a pas pu être intégré au SVG.',
   COORD_OUT_OF_RANGE: 'Des coordonnées sont hors du domaine du système de coordonnées déclaré.',
 };
 export const GENERIC_CONVERSION_ERROR = 'Erreur de conversion : le fichier n’a pas pu être traité.';
@@ -47,6 +50,12 @@ export function loadGeoPackageBytes(bytes) {
 
 export function exportDocumentToSvg(document, { now = new Date(), width, padding } = {}) {
   return { svg: renderExportDocument(document, { now, width, padding }), fileName: defaultSvgFileName(now) };
+}
+
+// Visible map (embedded basemap when complete + Cadastre + selected parcels when present, already in viewport pixels) -> SVG. Pure: no page, network or storage access.
+export function exportVisibleCadastre(capture, { now = new Date() } = {}) {
+  const document = prepareViewportDocument(capture);
+  return { svg: renderViewportDocument(document, { now }), fileName: viewportSvgFileName(now), summary: { features: document.meta.featureCount, ...(document.meta.backgroundEmbedded ? { backgroundEmbedded: true } : {}), ...(document.meta.selectedFeatureCount > 0 ? { selectedFeatures: document.meta.selectedFeatureCount } : {}), width: document.meta.viewport.width, height: document.meta.viewport.height } };
 }
 
 // UI-independent state machine. Dependencies are injected (`save` performs the

@@ -56,12 +56,15 @@ test('mask control has no persistence, network, authorization or permission surf
   assert.equal(manifest.host_permissions, undefined);
 });
 
-test('UI wires the mask button label to the control state and shows the absent message', async () => {
+test('MVP-07B: the mask command comes from the popup port; the page has no mask button', async () => {
   const ui = await readFile('tools/probe/content-ui.js', 'utf8');
-  assert.match(ui, /id="toggle-mask"/);
-  assert.match(ui, /button\.textContent = maskControl\.label\(\)/);
-  assert.match(ui, /result === 'absent' \? globalThis\.MonTerritoireMaskControl\.MASK_ABSENT_MESSAGE/);
-  assert.ok(ui.indexOf('<h2>Carte</h2>') < ui.indexOf('<h2>Export cadastre</h2>'));
-  assert.ok(ui.indexOf('<h2>Export cadastre</h2>') < ui.indexOf('<summary>Diagnostic</summary>'));
-  assert.match(ui, /<summary>Outils de développement<\/summary>/);
+  const popup = await readFile('tools/probe/popup.js', 'utf8');
+  const html = await readFile('tools/probe/popup.html', 'utf8');
+  assert.match(ui, /message\?\.type === 'mte:mask-toggle'/);
+  assert.match(ui, /maskControl\?\.toggle\(\)/);
+  assert.doesNotMatch(ui, /id="toggle-mask"/);
+  assert.match(popup, /type: 'mte:mask-toggle'/);
+  assert.match(popup, /maskButton\.textContent = message\.label/);
+  assert.match(html, /id="toggle-mask"/);
+  assert.ok(html.indexOf('Carte visible') < html.indexOf('Affichage') && html.indexOf('Affichage') < html.indexOf('GeoPackage'));
 });
